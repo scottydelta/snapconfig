@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "snapconfig"
-version = "0.5.0"
-description = "Fast zero-copy config file loading using rkyv"
+version = "0.6.0"
+description = "Superfast config loader for Python, powered by Rust + rkyv"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.8"
