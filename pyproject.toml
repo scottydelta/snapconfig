@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "snapconfig"
+version = "0.1.0"
+description = "Fast zero-copy config file loading using rkyv"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries",
+]
+keywords = ["config", "json", "yaml", "toml", "ini", "dotenv", "fast", "zero-copy", "cache", "rkyv"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pyyaml"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
