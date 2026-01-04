@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/scottydelta/snapconfig"><img src="https://img.shields.io/badge/GitHub-snapconfig-white?style=flat-square&logo=github&logoColor=black" alt="GitHub"></a>
   <a href="https://pypi.org/project/snapconfig/"><img src="https://img.shields.io/pypi/v/snapconfig?style=flat-square&logo=pypi&logoColor=white&label=PyPI" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/python-3.9+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.9+">
   <a href="https://github.com/scottydelta/snapconfig/blob/master/LICENSE"><img src="https://img.shields.io/github/license/scottydelta/snapconfig?style=flat-square" alt="License"></a>
