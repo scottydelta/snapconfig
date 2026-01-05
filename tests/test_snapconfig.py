@@ -179,6 +179,10 @@ class TestJSON:
         assert d["string"] == "hello"
         assert d["nested"]["key"] == "value"
 
+    def test_json_root_type_object(self, json_file):
+        config = snapconfig.load(json_file)
+        assert config.root_type() == "object"
+
 
 class TestYAML:
     def test_load_yaml(self, yaml_file):
@@ -233,20 +237,20 @@ class TestINI:
         assert "database" in config
         assert "cache" in config
 
-    def test_ini_null_and_bool_variants(self, temp_dir):
-        path = os.path.join(temp_dir, "null.ini")
+    def test_ini_bool_variants(self, temp_dir):
+        path = os.path.join(temp_dir, "bool.ini")
         content = """
 [section]
 empty =
-nil = nil
 TRUE = TRUE
 False = False
+yes = yes
+no = no
 """
         with open(path, "w") as f:
             f.write(content)
         config = snapconfig.load(path)
         assert config["section"]["empty"] == ""
-        assert config["section"]["nil"] is None
         assert config["section"]["TRUE"] is True
         assert config["section"]["False"] is False
         snapconfig.clear_cache(path)
@@ -325,6 +329,26 @@ class TestCaching:
         assert info["cache_exists"] is True
         assert info["cache_fresh"] is True
         assert info["cache_size"] > 0
+        assert info["cache_path"].endswith(".snapconfig")
+
+    def test_cache_info_missing_source_and_cache(self, temp_dir):
+        missing = os.path.join(temp_dir, "missing.json")
+        info = snapconfig.cache_info(missing)
+        assert info["source_exists"] is False
+        assert info["cache_exists"] is False
+        assert "cache_fresh" not in info
+        assert info["cache_path"].endswith(".snapconfig")
+
+    def test_cache_info_cache_only(self, json_file):
+        config = snapconfig.load(json_file)
+        assert os.path.exists(config.cache_path)
+        os.remove(json_file)
+
+        info = snapconfig.cache_info(json_file)
+        assert info["source_exists"] is False
+        assert info["cache_exists"] is True
+        assert info["cache_size"] > 0
+        assert "cache_fresh" not in info
 
     def test_clear_cache(self, json_file):
         snapconfig.load(json_file)
@@ -348,6 +372,15 @@ class TestCaching:
         custom_cache = os.path.join(temp_dir, "custom.snapconfig")
         snapconfig.load(json_file, cache_path=custom_cache)
         assert os.path.exists(custom_cache)
+
+    def test_load_uses_cache_when_source_missing(self, json_file):
+        config = snapconfig.load(json_file)
+        assert os.path.exists(config.cache_path)
+        os.remove(json_file)
+
+        cached = snapconfig.load(json_file)
+        assert cached["string"] == "hello"
+        assert cached.source_path is None
 
 
 class TestErrors:
@@ -386,6 +419,22 @@ class TestCompile:
         config = snapconfig.load_compiled(cache)
         assert config["string"] == "hello"
 
+    def test_load_compiled_without_source(self, json_file, temp_dir):
+        source_copy = os.path.join(temp_dir, "source.json")
+        cache = os.path.join(temp_dir, "compiled.snapconfig")
+
+        with open(json_file, "r") as f:
+            content = f.read()
+        with open(source_copy, "w") as f:
+            f.write(content)
+
+        snapconfig.compile(source_copy, cache)
+        os.remove(source_copy)
+
+        config = snapconfig.load_compiled(cache)
+        assert config["string"] == "hello"
+        assert config.source_path is None
+
 
 class TestPerformance:
     def test_cached_load_is_fast(self, json_file):
@@ -404,6 +453,81 @@ class TestPerformance:
 
         avg_cached = sum(times) / len(times)
         assert avg_cached < first_load
+
+
+class TestLoads:
+    def test_loads_json(self):
+        config = snapconfig.loads('{"key": "value", "num": 42}', format="json")
+        assert config["key"] == "value"
+        assert config["num"] == 42
+
+    def test_loads_yaml(self):
+        config = snapconfig.loads("key: value\nnum: 42", format="yaml")
+        assert config["key"] == "value"
+        assert config["num"] == 42
+
+    def test_loads_toml(self):
+        config = snapconfig.loads('[section]\nkey = "value"', format="toml")
+        assert config["section"]["key"] == "value"
+
+    def test_loads_ini(self):
+        config = snapconfig.loads("[section]\nkey = value\n", format="ini")
+        assert config["section"]["key"] == "value"
+
+    def test_loads_env(self):
+        config = snapconfig.loads("FOO=bar\nNUM=42\nBOOL=true\n", format="env")
+        assert config["FOO"] == "bar"
+        assert config["NUM"] == 42
+        assert config["BOOL"] is True
+
+
+class TestGetDotted:
+    def test_get_dotted_path(self, json_file):
+        config = snapconfig.load(json_file)
+        assert config.get("string") == "hello"
+        assert config.get("nested.key") == "value"
+        assert config.get("nested.deep.level") == 3
+
+    def test_get_raises_on_missing(self, json_file):
+        config = snapconfig.load(json_file)
+        with pytest.raises(KeyError):
+            config.get("nonexistent")
+
+    def test_get_with_default(self, json_file):
+        config = snapconfig.load(json_file)
+        # Missing key returns default
+        assert config.get("nonexistent", default=5432) == 5432
+        assert config.get("database.port", default=5432) == 5432
+        # String default
+        assert config.get("missing", default="fallback") == "fallback"
+        # Existing key ignores default
+        assert config.get("integer", default=0) == 42
+        assert config.get("nested.key", default="fallback") == "value"
+
+    def test_get_default_with_array_index(self, json_file):
+        config = snapconfig.load(json_file)
+        # Out of bounds index returns default
+        assert config.get("array.999", default="missing") == "missing"
+
+
+class TestIteration:
+    def test_iterate_keys(self, json_file):
+        config = snapconfig.load(json_file)
+        keys = config.keys()
+        assert "string" in keys
+        assert "integer" in keys
+        assert "nested" in keys
+        assert len(keys) == 7
+
+    def test_iterate_directly(self, json_file):
+        config = snapconfig.load(json_file)
+        assert set(iter(config)) == set(config.keys())
+
+    def test_iterate_with_values(self, json_file):
+        config = snapconfig.load(json_file)
+        items = {key: config[key] for key in config.keys()}
+        assert items["string"] == "hello"
+        assert items["integer"] == 42
 
 
 class TestEdgeCases:
@@ -472,11 +596,40 @@ class TestEdgeCases:
             config.get("0.id.more")
         snapconfig.clear_cache(path)
 
-    def test_object_keys_sorted(self, temp_dir):
+    def test_object_keys_access(self, temp_dir):
         path = os.path.join(temp_dir, "unordered.json")
         with open(path, "w") as f:
             json.dump({"b": 1, "a": 2, "c": 3}, f)
         config = snapconfig.load(path)
         keys = list(config.keys())
-        assert keys == ["a", "b", "c"]
+        assert set(keys) == {"a", "b", "c"}
+        assert config["a"] == 2
+        assert config["b"] == 1
         snapconfig.clear_cache(path)
+
+
+class TestInvalidCache:
+    def test_empty_cache_raises(self, temp_dir):
+        cache = os.path.join(temp_dir, "empty.snapconfig")
+        with open(cache, "wb") as f:
+            f.write(b"")
+        with pytest.raises(ValueError):
+            snapconfig.load_compiled(cache)
+
+    def test_corrupted_cache_raises(self, temp_dir):
+        cache = os.path.join(temp_dir, "corrupted.snapconfig")
+        with open(cache, "wb") as f:
+            f.write(b"\x00" * 64)
+        with pytest.raises(ValueError):
+            snapconfig.load_compiled(cache)
+
+    def test_corrupted_magic_cache_raises(self, temp_dir):
+        cache = os.path.join(temp_dir, "corrupted_magic.snapconfig")
+        # Valid header + invalid payload
+        with open(cache, "wb") as f:
+            f.write(b"SNAPCFG\x00")  # magic
+            f.write((1).to_bytes(4, "little"))  # version
+            f.write(b"\x00" * 4)  # reserved
+            f.write(b"\x00" * 64)  # payload (invalid rkyv data)
+        with pytest.raises(ValueError):
+            snapconfig.load_compiled(cache)

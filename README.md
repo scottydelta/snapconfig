@@ -45,7 +45,7 @@ config = snapconfig.load("settings.ini")
 
 # Access values like a dict
 db_host = config["database"]["host"]
-db_port = config.get("database.port")  # dot notation supported
+db_port = config.get("database.port", default=5432)  # dot notation with default
 
 # Load .env files
 env = snapconfig.load_env(".env")
@@ -161,23 +161,29 @@ config = snapconfig.load("config.json")
 # Dict-like access
 config["database"]["host"]
 config["database"]["port"]
+config["servers"][0]          # Array index access
 
-# Dot notation for nested access
+# Dot notation for nested access (with optional default)
 config.get("database.host")
-config.get("database.port", default=5432)
+config.get("database.port", default=5432)       # Returns 5432 if missing
+config.get("servers.0.name", default="unknown") # Array index in path
 
 # Iteration
-for key in config:
+for key in config:            # Iterates keys (objects) or values (arrays)
     print(key, config[key])
 
 # Membership
 "database" in config  # True
 
-# Info
-len(config)           # Number of keys
-config.keys()         # List of keys
-config.to_dict()      # Convert to Python dict
-config.root_type()    # "object", "array", etc.
+# Length
+len(config)           # Number of keys (objects) or items (arrays)
+
+# Introspection
+config.keys()         # List of top-level keys
+config.to_dict()      # Convert to Python dict (loses zero-copy benefits)
+config.root_type()    # "object", "array", "string", "int", etc.
+config.cache_path     # Path to the cache file
+config.source_path    # Path to the source file (if known)
 ```
 
 ## Cross-process benefits

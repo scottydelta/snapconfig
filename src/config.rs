@@ -7,10 +7,59 @@ use pyo3::types::{PyDict, PyInt, PyList, PyString};
 
 use crate::value::{ArchivedFlatValue, ArchivedValueNode, FlatValue};
 
+#[pyclass]
+struct SnapConfigIter {
+    config: Py<PyAny>,
+    pos: usize,
+    kind: u8, // 0 = object keys, 1 = array values
+}
+
+#[pymethods]
+impl SnapConfigIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> PyResult<Option<PyObject>> {
+        let py = slf.py();
+        let config_any = slf.config.bind(py);
+        let config = config_any.downcast::<SnapConfig>()?.borrow();
+        let archived = config.archived();
+        let root_node = &archived.nodes[config.root_idx as usize];
+
+        match slf.kind {
+            0 => match root_node {
+                ArchivedValueNode::Object(pairs) => {
+                    if slf.pos >= pairs.len() {
+                        return Ok(None);
+                    }
+                    let key = pairs[slf.pos].0.as_str().to_object(py);
+                    slf.pos += 1;
+                    Ok(Some(key))
+                }
+                _ => Err(PyTypeError::new_err("Cannot iterate keys on non-object")),
+            },
+            1 => match root_node {
+                ArchivedValueNode::Array(indices) => {
+                    if slf.pos >= indices.len() {
+                        return Ok(None);
+                    }
+                    let value = node_to_python(py, &archived.nodes, indices[slf.pos])?;
+                    slf.pos += 1;
+                    Ok(Some(value))
+                }
+                _ => Err(PyTypeError::new_err("Cannot iterate values on non-array")),
+            },
+            _ => Err(PyTypeError::new_err("Invalid iterator state")),
+        }
+    }
+}
+
 /// Zero-copy view into cached configuration data.
 #[pyclass]
 pub struct SnapConfig {
     mmap: Mmap,
+    data_offset: usize,
     root_idx: u32,
     #[pyo3(get)]
     cache_path: String,
@@ -19,9 +68,16 @@ pub struct SnapConfig {
 }
 
 impl SnapConfig {
-    pub fn new(mmap: Mmap, root_idx: u32, cache_path: String, source_path: Option<String>) -> Self {
+    pub fn new(
+        mmap: Mmap,
+        data_offset: usize,
+        root_idx: u32,
+        cache_path: String,
+        source_path: Option<String>,
+    ) -> Self {
         Self {
             mmap,
+            data_offset,
             root_idx,
             cache_path,
             source_path,
@@ -30,7 +86,8 @@ impl SnapConfig {
 
     #[inline]
     pub(crate) fn archived(&self) -> &ArchivedFlatValue {
-        unsafe { rkyv::archived_root::<FlatValue>(&self.mmap) }
+        let bytes = &self.mmap[self.data_offset..];
+        unsafe { rkyv::archived_root::<FlatValue>(bytes) }
     }
 
     fn node_type_name(node: &ArchivedValueNode) -> &'static str {
@@ -48,6 +105,26 @@ impl SnapConfig {
 
 #[pymethods]
 impl SnapConfig {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyResult<Py<SnapConfigIter>> {
+        let py = slf.py();
+        let archived = slf.archived();
+        let root_node = &archived.nodes[slf.root_idx as usize];
+        let kind = match root_node {
+            ArchivedValueNode::Object(_) => 0,
+            ArchivedValueNode::Array(_) => 1,
+            _ => return Err(PyTypeError::new_err("Cannot iterate over scalar value")),
+        };
+
+        Py::new(
+            py,
+            SnapConfigIter {
+                config: slf.into_py(py),
+                pos: 0,
+                kind,
+            },
+        )
+    }
+
     fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<PyObject> {
         let archived = self.archived();
         let root_node = &archived.nodes[self.root_idx as usize];
@@ -55,7 +132,9 @@ impl SnapConfig {
     }
 
     /// Get nested value using dot notation (e.g., "database.host").
-    fn get(&self, py: Python<'_>, path: &str) -> PyResult<PyObject> {
+    /// Returns `default` if the path is not found (or raises KeyError if no default).
+    #[pyo3(signature = (path, default=None))]
+    fn get(&self, py: Python<'_>, path: &str, default: Option<PyObject>) -> PyResult<PyObject> {
         let archived = self.archived();
         let parts: Vec<&str> = path.split('.').collect();
         let mut current_idx = self.root_idx;
@@ -67,7 +146,10 @@ impl SnapConfig {
                     if let Some(idx) = find_key_in_object(pairs, part) {
                         current_idx = idx;
                     } else {
-                        return Err(PyKeyError::new_err(format!("Key not found: {}", part)));
+                        return match default {
+                            Some(d) => Ok(d),
+                            None => Err(PyKeyError::new_err(format!("Key not found: {}", part))),
+                        };
                     }
                 }
                 ArchivedValueNode::Array(indices) => {
@@ -75,10 +157,13 @@ impl SnapConfig {
                         if idx < indices.len() {
                             current_idx = indices[idx];
                         } else {
-                            return Err(PyKeyError::new_err(format!(
-                                "Index out of bounds: {}",
-                                idx
-                            )));
+                            return match default {
+                                Some(d) => Ok(d),
+                                None => Err(PyKeyError::new_err(format!(
+                                    "Index out of bounds: {}",
+                                    idx
+                                ))),
+                            };
                         }
                     } else {
                         return Err(PyTypeError::new_err("Cannot index array with non-integer"));

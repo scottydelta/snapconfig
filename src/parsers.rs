@@ -216,12 +216,11 @@ pub fn parse_env(content: &str) -> FlatValue {
             let mut value = line[eq_pos + 1..].trim().to_string();
 
             // Remove surrounding quotes if present
-            if (value.starts_with('"') && value.ends_with('"'))
-                || (value.starts_with('\'') && value.ends_with('\''))
+            if ((value.starts_with('"') && value.ends_with('"'))
+                || (value.starts_with('\'') && value.ends_with('\'')))
+                && value.len() >= 2
             {
-                if value.len() >= 2 {
-                    value = value[1..value.len() - 1].to_string();
-                }
+                value = value[1..value.len() - 1].to_string();
             }
 
             let value_idx = parse_scalar_value(&mut flat, &value);

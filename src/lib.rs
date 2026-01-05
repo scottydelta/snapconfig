@@ -25,6 +25,54 @@ pub use error::{Result, SnapconfigError};
 pub use parsers::Format;
 pub use value::{FlatValue, ValueNode};
 
+const CACHE_MAGIC: &[u8; 8] = b"SNAPCFG\0";
+const CACHE_VERSION: u32 = 1;
+const CACHE_HEADER_LEN: usize = 16; // keep payload aligned for rkyv access
+
+fn cache_header() -> [u8; CACHE_HEADER_LEN] {
+    let mut header = [0u8; CACHE_HEADER_LEN];
+    header[..8].copy_from_slice(CACHE_MAGIC);
+    header[8..12].copy_from_slice(&CACHE_VERSION.to_le_bytes());
+    header
+}
+
+fn split_cache_bytes(mmap: &Mmap) -> std::result::Result<(usize, &[u8]), SnapconfigError> {
+    if mmap.is_empty() {
+        return Err(SnapconfigError::InvalidCache(
+            "Cache file is empty".to_string(),
+        ));
+    }
+
+    if mmap.len() < CACHE_HEADER_LEN {
+        return Err(SnapconfigError::InvalidCache(
+            "Cache header is missing or truncated".to_string(),
+        ));
+    }
+
+    if &mmap[..8] != CACHE_MAGIC {
+        return Err(SnapconfigError::InvalidCache(
+            "Cache header magic mismatch".to_string(),
+        ));
+    }
+
+    let version = u32::from_le_bytes(mmap[8..12].try_into().unwrap());
+    if version != CACHE_VERSION {
+        return Err(SnapconfigError::InvalidCache(format!(
+            "Unsupported cache version: {}",
+            version
+        )));
+    }
+
+    let payload = &mmap[CACHE_HEADER_LEN..];
+    if payload.is_empty() {
+        return Err(SnapconfigError::InvalidCache(
+            "Cache payload is empty".to_string(),
+        ));
+    }
+
+    Ok((CACHE_HEADER_LEN, payload))
+}
+
 #[pyfunction]
 #[pyo3(signature = (source_path, cache_path=None))]
 fn compile(source_path: &str, cache_path: Option<&str>) -> PyResult<String> {
@@ -48,6 +96,7 @@ fn compile(source_path: &str, cache_path: Option<&str>) -> PyResult<String> {
         .prefix("snapconfig-")
         .suffix(".tmp")
         .tempfile_in(parent)?;
+    tmp.as_file_mut().write_all(&cache_header())?;
     tmp.as_file_mut().write_all(&bytes)?;
     tmp.as_file_mut().sync_all()?;
     tmp.persist(&output_path)
@@ -95,14 +144,12 @@ fn load_compiled(cache_path: &str, source_path: Option<&str>) -> PyResult<SnapCo
     let file = fs::File::open(cache_path)?;
     let mmap = unsafe { Mmap::map(&file)? };
 
-    if mmap.is_empty() {
-        return Err(SnapconfigError::InvalidCache("Cache file is empty".to_string()).into());
-    }
+    let (data_offset, payload) = split_cache_bytes(&mmap)?;
 
-    rkyv::check_archived_root::<FlatValue>(&mmap)
+    rkyv::check_archived_root::<FlatValue>(payload)
         .map_err(|e| SnapconfigError::InvalidCache(format!("Validation failed: {}", e)))?;
 
-    let archived = unsafe { rkyv::archived_root::<FlatValue>(&mmap) };
+    let archived = unsafe { rkyv::archived_root::<FlatValue>(payload) };
     let root_idx = archived
         .root
         .as_ref()
@@ -117,6 +164,7 @@ fn load_compiled(cache_path: &str, source_path: Option<&str>) -> PyResult<SnapCo
 
     Ok(SnapConfig::new(
         mmap,
+        data_offset,
         root_idx,
         cache_path.to_string(),
         source_path.map(String::from),
